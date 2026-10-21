@@ -1,0 +1,53 @@
+name: Corretoras RS (base CNPJ da Receita)
+
+# Roda toda segunda-feira às 06h (Brasília). O script só reprocessa quando a
+# Receita publica um mês novo; nas outras semanas termina em segundos.
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      forcar:
+        description: 'Reprocessar mesmo que o mês já tenha sido gerado'
+        type: boolean
+        default: false
+      meses:
+        description: 'Quantos meses de abertura guardar'
+        default: '24'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: corretoras-rs
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Filtrar corretoras do RS na base da Receita
+        env:
+          MESES: ${{ github.event.inputs.meses || '24' }}
+        run: |
+          python scripts/corretoras_rs.py --saida corretoras/corretoras_rs.json ${{ github.event.inputs.forcar == 'true' && '--forcar' || '' }}
+
+      - name: Publicar o arquivo atualizado
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add corretoras/corretoras_rs.json
+          if git diff --cached --quiet; then
+            echo "Sem alterações."
+          else
+            git commit -m "Corretoras RS: base CNPJ atualizada"
+            git pull --rebase
+            git push
+          fi
