@@ -4,7 +4,7 @@ Novas corretoras de seguros no RS — filtro da base aberta de CNPJ da Receita F
 
 Baixa a base mensal (WebDAV público da Receita), separa os estabelecimentos com
 CNAE 66.22-3-00 (Corretores e agentes de seguros, de planos de previdência
-complementar e de saúde), UF = RS e data de abertura nos últimos N meses, junta
+complementar e de saúde), UF = RS, PR ou SC e data de abertura nos últimos N meses, junta
 razão social, município e sócios, e grava um JSON leve para a página corretora.php.
 
 Uso:
@@ -12,7 +12,7 @@ Uso:
     python corretoras_rs.py --saida saida.json --local pasta_com_zips   (teste, sem baixar)
     python corretoras_rs.py --saida saida.json --forcar                 (reprocessa o mesmo mês)
 
-Variáveis opcionais: MESES (padrão 24), UF (padrão RS), CNAE (padrão 6622300).
+Variáveis opcionais: MESES (padrão 24), UF (padrão RS,PR,SC), CNAE (padrão 6622300).
 """
 import argparse
 import base64
@@ -34,7 +34,7 @@ TOKEN = 'YggdBLfdninEJX9'  # token público do compartilhamento da Receita (não
 AUTH = 'Basic ' + base64.b64encode((TOKEN + ':').encode()).decode()
 
 CNAE = os.getenv('CNAE', '6622300')
-UF = os.getenv('UF', 'RS')
+UFS = [u.strip().upper() for u in os.getenv('UF', 'RS,PR,SC').split(',') if u.strip()]
 MESES = int(os.getenv('MESES', '24'))
 
 SITUACAO = {'01': 'NULA', '1': 'NULA', '02': 'ATIVA', '2': 'ATIVA', '03': 'SUSPENSA', '3': 'SUSPENSA',
@@ -173,7 +173,7 @@ def processar(fonte, referencia):
         corte_mes += 12
         corte_ano -= 1
     corte = f'{corte_ano}{corte_mes:02d}01'
-    log(f'Filtro: CNAE {CNAE}, UF {UF}, abertura a partir de {corte}')
+    log(f'Filtro: CNAE {CNAE}, UF {",".join(UFS)}, abertura a partir de {corte}')
 
     municipios = tabela(fonte, 'Municipios.zip')
 
@@ -186,7 +186,7 @@ def processar(fonte, referencia):
             if CNAE not in linha:  # filtro rápido antes de interpretar a linha
                 continue
             c = campos(linha)
-            if len(c) < 28 or c[19].strip() != UF:
+            if len(c) < 28 or c[19].strip() not in UFS:
                 continue
             principal = c[11].strip() == CNAE
             if not principal and CNAE not in c[12].split(','):
@@ -208,6 +208,7 @@ def processar(fonte, referencia):
                 'bairro': c[17].strip(),
                 'cep': c[18].strip(),
                 'municipio': municipios.get(c[20].strip(), c[20].strip()),
+                'uf': c[19].strip(),
                 'telefones': [d + t for d, t in ((c[21].strip(), c[22].strip()), (c[23].strip(), c[24].strip())) if t],
                 'email': c[27].strip().lower(),
             })
@@ -274,7 +275,7 @@ def processar(fonte, referencia):
         'gerado_em': dt.datetime.now().strftime('%Y-%m-%d %H:%M'),
         'referencia': referencia,
         'cnae': CNAE,
-        'uf': UF,
+        'uf': ','.join(UFS),
         'meses': MESES,
         'abertura_desde': f'{corte[:4]}-{corte[4:6]}-{corte[6:]}',
         'total': len(lista),
@@ -297,7 +298,7 @@ def main():
         try:
             with open(a.saida, encoding='utf-8') as f:
                 atual = json.load(f)
-            if atual.get('referencia') == mes and atual.get('meses') == MESES:
+            if atual.get('referencia') == mes and atual.get('meses') == MESES and atual.get('uf') == ','.join(UFS):
                 log('Este mês já foi processado. Nada a fazer.')
                 return
         except Exception:
