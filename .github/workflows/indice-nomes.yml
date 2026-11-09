@@ -50,7 +50,7 @@ jobs:
             echo "::error::Falta o arquivo scripts/indice_nomes.py no repositório (envie para a pasta scripts/)."
             exit 1
           fi
-          python scripts/indice_nomes.py --saida indice/empresas_rs.txt.gz --info indice/empresas_rs_info.json \
+          python scripts/indice_nomes.py --saida indice/empresas_rs.txt.gz --info indice/empresas_rs_info.json --cnaes indice/cnaes.json \
             ${{ github.event.inputs.forcar == 'true' && '--forcar' || '' }} | tee saida.log
           if grep -q NADA_NOVO saida.log; then
             echo "novo=0" >> "$GITHUB_OUTPUT"
@@ -76,7 +76,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add indice/empresas_rs_info.json
+          git add indice/empresas_rs_info.json indice/cnaes.json
           if git diff --cached --quiet; then
             echo "Sem alterações."
           else
