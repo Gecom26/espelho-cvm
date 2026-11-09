@@ -45,9 +45,21 @@ jobs:
           UF: ${{ github.event.inputs.uf || 'RS' }}
           SEM_MEI: ${{ github.event.inputs.sem_mei || '1' }}
         run: |
+          set -o pipefail
+          if [ ! -f scripts/indice_nomes.py ]; then
+            echo "::error::Falta o arquivo scripts/indice_nomes.py no repositório (envie para a pasta scripts/)."
+            exit 1
+          fi
           python scripts/indice_nomes.py --saida indice/empresas_rs.txt.gz --info indice/empresas_rs_info.json \
             ${{ github.event.inputs.forcar == 'true' && '--forcar' || '' }} | tee saida.log
-          if grep -q NADA_NOVO saida.log; then echo "novo=0" >> "$GITHUB_OUTPUT"; else echo "novo=1" >> "$GITHUB_OUTPUT"; fi
+          if grep -q NADA_NOVO saida.log; then
+            echo "novo=0" >> "$GITHUB_OUTPUT"
+          elif [ -s indice/empresas_rs.txt.gz ]; then
+            echo "novo=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::O índice não foi gerado (indice/empresas_rs.txt.gz não existe)."
+            exit 1
+          fi
 
       - name: Publicar o índice na release "indice-nomes"
         if: steps.gerar.outputs.novo == '1'
