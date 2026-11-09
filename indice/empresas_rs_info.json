@@ -1,0 +1,11 @@
+{
+ "gerado_em": "2026-11-09 03:48",
+ "referencia": "2026-10",
+ "uf": "RS",
+ "sem_mei": true,
+ "total": 906202,
+ "bytes_gz": 27424367,
+ "bytes_texto": 95857075,
+ "versao": 2,
+ "formato": "CNPJ|RAZAO|FANTASIA|MUNICIPIO|M/F|CNAE|CNAES_SECUNDARIOS|SIMPLES"
+}
