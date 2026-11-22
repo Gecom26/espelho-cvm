@@ -11,15 +11,17 @@ compactado, uma empresa por linha:
 (CNAEs com 7 dígitos; secundários separados por vírgula.) Gera também a
 tabela de CNAEs (código e descrição) em JSON, para a busca por atividade.
 
-- Só estabelecimentos ATIVOS da(s) UF(s) escolhida(s) (padrão RS).
+- Só estabelecimentos ATIVOS da(s) UF(s) escolhida(s) (padrão RS, PR e SC).
 - Sem MEI (padrão), para o arquivo caber na hospedagem. Use SEM_MEI=0 para incluir.
 - Nomes em maiúsculas sem acento (a busca no PHP é feita assim).
 
+Com várias UFs, use {uf} no nome dos arquivos: sai um índice por estado.
+
 Uso:
-    python indice_nomes.py --saida indice/empresas_rs.txt.gz --info indice/empresas_rs_info.json --cnaes indice/cnaes.json
+    UF=RS,PR,SC python indice_nomes.py --saida 'indice/empresas_{uf}.txt.gz' --info 'indice/empresas_{uf}_info.json' --cnaes indice/cnaes.json
     python indice_nomes.py --saida x.txt.gz --info x.json --local pasta_com_zips   (teste, sem baixar)
 
-Variáveis opcionais: UF (padrão RS), SEM_MEI (padrão 1).
+Variáveis opcionais: UF (padrão RS,PR,SC), SEM_MEI (padrão 1).
 """
 import argparse
 import datetime as dt
@@ -32,7 +34,7 @@ import unicodedata
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from corretoras_rs import Fonte, campos, linhas_zip, log, mes_mais_recente, tabela  # noqa: E402
 
-UFS = [u.strip().upper() for u in os.getenv('UF', 'RS').split(',') if u.strip()]
+UFS = [u.strip().upper() for u in os.getenv('UF', 'RS,PR,SC').split(',') if u.strip()]
 SEM_MEI = os.getenv('SEM_MEI', '1') != '0'
 VERSAO = 2  # formato da linha; mudar força reprocessar
 
@@ -68,7 +70,7 @@ def processar(fonte, arq_cnaes=None):
             if len(c) < 21 or c[19].strip() not in UFS or c[5].strip() not in ('02', '2'):
                 continue
             secundarios = ','.join(x.strip() for x in c[12].split(',') if x.strip().isdigit())
-            estab.append((c[0].strip(), c[0].strip() + c[1].strip() + c[2].strip(),
+            estab.append((c[19].strip(), c[0].strip(), c[0].strip() + c[1].strip() + c[2].strip(),
                           'M' if c[3].strip() == '1' else 'F', normalizar(c[4]),
                           normalizar(municipios.get(c[20].strip(), c[20].strip())),
                           c[11].strip(), secundarios))
@@ -76,7 +78,7 @@ def processar(fonte, arq_cnaes=None):
         log(f'  Estabelecimentos{i}: {achados} ativos em {",".join(UFS)}')
         if apagar:
             os.remove(caminho)
-    basicos = {e[0] for e in estab}
+    basicos = {e[1] for e in estab}
     log(f'{len(estab)} estabelecimentos ativos, {len(basicos)} empresas')
 
     # 2) Simples Nacional e MEI (o MEI fica de fora para o índice caber na hospedagem)
@@ -109,16 +111,17 @@ def processar(fonte, arq_cnaes=None):
         if apagar:
             os.remove(caminho)
 
-    linhas = []
-    for basico, cnpj, matriz, fantasia, municipio, cnae, secundarios in estab:
+    linhas = {u: [] for u in UFS}
+    for uf, basico, cnpj, matriz, fantasia, municipio, cnae, secundarios in estab:
         if basico in mei:
             continue
         razao = razoes.get(basico, '')
         if not razao and not fantasia:
             continue
-        linhas.append(f'{cnpj}|{razao}|{fantasia if fantasia != razao else ""}|{municipio}|{matriz}|{cnae}|{secundarios}|'
+        linhas[uf].append(f'{cnpj}|{razao}|{fantasia if fantasia != razao else ""}|{municipio}|{matriz}|{cnae}|{secundarios}|'
                       + ('S' if basico in simples else 'N'))
-    linhas.sort(key=lambda l: l.split('|', 2)[1])
+    for lista in linhas.values():
+        lista.sort(key=lambda l: l.split('|', 2)[1])
     return linhas
 
 
@@ -132,41 +135,48 @@ def main():
     ap.add_argument('--forcar', action='store_true')
     a = ap.parse_args()
 
+    if len(UFS) > 1 and ('{uf}' not in a.saida or '{uf}' not in a.info):
+        ap.error('com várias UFs, use {uf} em --saida e --info')
+    arq = lambda modelo, uf: modelo.replace('{uf}', uf.lower())
+
     mes = a.mes or ('local' if a.local else mes_mais_recente())
     log(f'Base de referência: {mes}')
-    if not a.forcar and not a.local and os.path.exists(a.info):
-        try:
-            with open(a.info, encoding='utf-8') as f:
-                atual = json.load(f)
-            if atual.get('referencia') == mes and atual.get('uf') == ','.join(UFS) and atual.get('sem_mei') == SEM_MEI \
-                    and atual.get('versao') == VERSAO:
-                log('Este mês já foi processado. Nada a fazer.')
-                print('NADA_NOVO')
-                return
-        except Exception:
-            pass
+    if not a.forcar and not a.local:
+        def feito(uf):
+            try:
+                with open(arq(a.info, uf), encoding='utf-8') as f:
+                    atual = json.load(f)
+                return atual.get('referencia') == mes and atual.get('uf') == uf and atual.get('sem_mei') == SEM_MEI \
+                    and atual.get('versao') == VERSAO
+            except Exception:
+                return False
+        if all(feito(u) for u in UFS):
+            log('Este mês já foi processado. Nada a fazer.')
+            print('NADA_NOVO')
+            return
 
-    linhas = processar(Fonte(mes, a.local, tmp='tmp_cnpj_nomes'), a.cnaes)
-    for p in (a.saida, a.info):
-        os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
-    with gzip.open(a.saida, 'wt', encoding='ascii', compresslevel=9) as f:
-        for l in linhas:
-            f.write(l + '\n')
-    info = {
-        'gerado_em': dt.datetime.now().strftime('%Y-%m-%d %H:%M'),
-        'referencia': mes,
-        'uf': ','.join(UFS),
-        'sem_mei': SEM_MEI,
-        'total': len(linhas),
-        'bytes_gz': os.path.getsize(a.saida),
-        'bytes_texto': sum(len(l) + 1 for l in linhas),
-        'versao': VERSAO,
-        'formato': 'CNPJ|RAZAO|FANTASIA|MUNICIPIO|M/F|CNAE|CNAES_SECUNDARIOS|SIMPLES',
-    }
-    with open(a.info, 'w', encoding='utf-8') as f:
-        json.dump(info, f, ensure_ascii=False, indent=1)
-    log(f'Gravado {a.saida}: {len(linhas)} empresas, {info["bytes_gz"] / 1e6:.1f} MB compactado')
-
+    por_uf = processar(Fonte(mes, a.local, tmp='tmp_cnpj_nomes'), a.cnaes)
+    for uf, linhas in por_uf.items():
+        saida, arq_info = arq(a.saida, uf), arq(a.info, uf)
+        for p in (saida, arq_info):
+            os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+        with gzip.open(saida, 'wt', encoding='ascii', compresslevel=9) as f:
+            for l in linhas:
+                f.write(l + '\n')
+        info = {
+            'gerado_em': dt.datetime.now().strftime('%Y-%m-%d %H:%M'),
+            'referencia': mes,
+            'uf': uf,
+            'sem_mei': SEM_MEI,
+            'total': len(linhas),
+            'bytes_gz': os.path.getsize(saida),
+            'bytes_texto': sum(len(l) + 1 for l in linhas),
+            'versao': VERSAO,
+            'formato': 'CNPJ|RAZAO|FANTASIA|MUNICIPIO|M/F|CNAE|CNAES_SECUNDARIOS|SIMPLES',
+        }
+        with open(arq_info, 'w', encoding='utf-8') as f:
+            json.dump(info, f, ensure_ascii=False, indent=1)
+        log(f'Gravado {saida}: {len(linhas)} empresas, {info["bytes_gz"] / 1e6:.1f} MB compactado')
 
 if __name__ == '__main__':
     main()
