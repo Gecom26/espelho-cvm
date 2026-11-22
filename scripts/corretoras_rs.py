@@ -58,9 +58,18 @@ def requisicao(url, metodo='GET', cabecalhos=None):
 
 def listar(pasta=''):
     """PROPFIND Depth 1 → lista de (nome, tamanho)."""
-    req = requisicao(BASE + pasta, 'PROPFIND', {'Depth': '1'})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        xml = r.read()
+    # a Receita às vezes derruba a conexão (Connection reset): tenta de novo antes de desistir
+    for tentativa in range(1, 7):
+        try:
+            req = requisicao(BASE + pasta, 'PROPFIND', {'Depth': '1'})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                xml = r.read()
+            break
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if tentativa == 6 or (isinstance(e, urllib.error.HTTPError) and e.code in (401, 403, 404)):
+                raise
+            log(f'  listar {pasta or "/"}: falha na tentativa {tentativa}: {e}')
+            time.sleep(30 * tentativa)
     ns = {'d': 'DAV:'}
     itens = []
     for resp in ET.fromstring(xml).findall('d:response', ns):
