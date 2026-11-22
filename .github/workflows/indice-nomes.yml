@@ -1,10 +1,11 @@
-name: Índice de nomes de empresas RS (base CNPJ da Receita)
+name: Índice de nomes de empresas RS, PR e SC (base CNPJ da Receita)
 
 # Gera o índice usado pela busca por NOME da Consulta CNPJ do D'AGILI FORCE.
 # Roda toda terça às 06h (Brasília). Só reprocessa quando a Receita publica
 # um mês novo; nas outras semanas termina em segundos.
 # O arquivo grande vai como anexo da release "indice-nomes" (não pesa no
-# repositório); só o pequeno indice/empresas_rs_info.json é commitado.
+# repositório), um por estado (empresas_rs/pr/sc.txt.gz); só os pequenos
+# indice/empresas_<uf>_info.json são commitados.
 on:
   schedule:
     - cron: '0 9 * * 2'
@@ -16,7 +17,7 @@ on:
         default: false
       uf:
         description: 'UF(s) do índice, separadas por vírgula'
-        default: 'RS'
+        default: 'RS,PR,SC'
       sem_mei:
         description: 'Deixar MEI de fora (1 = sim, 0 = não)'
         default: '1'
@@ -42,7 +43,7 @@ jobs:
       - name: Gerar o índice de nomes
         id: gerar
         env:
-          UF: ${{ github.event.inputs.uf || 'RS' }}
+          UF: ${{ github.event.inputs.uf || 'RS,PR,SC' }}
           SEM_MEI: ${{ github.event.inputs.sem_mei || '1' }}
         run: |
           set -o pipefail
@@ -50,14 +51,14 @@ jobs:
             echo "::error::Falta o arquivo scripts/indice_nomes.py no repositório (envie para a pasta scripts/)."
             exit 1
           fi
-          python scripts/indice_nomes.py --saida indice/empresas_rs.txt.gz --info indice/empresas_rs_info.json --cnaes indice/cnaes.json \
+          python scripts/indice_nomes.py --saida 'indice/empresas_{uf}.txt.gz' --info 'indice/empresas_{uf}_info.json' --cnaes indice/cnaes.json \
             ${{ github.event.inputs.forcar == 'true' && '--forcar' || '' }} | tee saida.log
           if grep -q NADA_NOVO saida.log; then
             echo "novo=0" >> "$GITHUB_OUTPUT"
-          elif [ -s indice/empresas_rs.txt.gz ]; then
+          elif ls indice/empresas_*.txt.gz >/dev/null 2>&1; then
             echo "novo=1" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::O índice não foi gerado (indice/empresas_rs.txt.gz não existe)."
+            echo "::error::O índice não foi gerado (nenhum indice/empresas_*.txt.gz)."
             exit 1
           fi
 
@@ -69,18 +70,18 @@ jobs:
           gh release view indice-nomes >/dev/null 2>&1 || \
             gh release create indice-nomes --title "Índice de nomes de empresas (CNPJ)" \
               --notes "Arquivo usado pela busca por nome do D'AGILI FORCE. Atualizado automaticamente todo mês."
-          gh release upload indice-nomes indice/empresas_rs.txt.gz --clobber
+          gh release upload indice-nomes indice/empresas_*.txt.gz --clobber
 
       - name: Commitar o resumo (referência e tamanho)
         if: steps.gerar.outputs.novo == '1'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add indice/empresas_rs_info.json indice/cnaes.json
+          git add indice/empresas_*_info.json indice/cnaes.json
           if git diff --cached --quiet; then
             echo "Sem alterações."
           else
-            git commit -m "Índice de nomes RS: base CNPJ atualizada"
+            git commit -m "Índice de nomes RS/PR/SC: base CNPJ atualizada"
             git pull --rebase
             git push
           fi
