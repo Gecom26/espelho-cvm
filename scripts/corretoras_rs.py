@@ -32,6 +32,10 @@ import zipfile
 BASE = 'https://arquivos.receitafederal.gov.br/public.php/webdav/'
 TOKEN = 'YggdBLfdninEJX9'  # token público do compartilhamento da Receita (não é segredo)
 AUTH = 'Basic ' + base64.b64encode((TOKEN + ':').encode()).decode()
+# Cópia pública da mesma base (Casa dos Dados, CDN). Usada quando o site da Receita recusa a conexão
+# (o firewall dela derruba IPs de nuvem como os do GitHub). Pastas com a data: AAAA-MM-DD/.
+ESPELHO = 'https://dados-abertos-rf-cnpj.casadosdados.com.br/arquivos/'
+NAVEGADOR = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
 CNAE = os.getenv('CNAE', '6622300')
 UFS = [u.strip().upper() for u in os.getenv('UF', 'RS,PR,SC').split(',') if u.strip()]
@@ -49,24 +53,25 @@ def log(*a):
 # ---------------------------------------------------------------- download
 def requisicao(url, metodo='GET', cabecalhos=None):
     req = urllib.request.Request(url, method=metodo)
-    req.add_header('Authorization', AUTH)
-    req.add_header('User-Agent', 'corretoras-rs/1.0 (dados abertos CNPJ)')
+    if url.startswith(BASE):
+        req.add_header('Authorization', AUTH)
+    req.add_header('User-Agent', NAVEGADOR)  # o firewall da Receita bloqueia user-agent de robô
     for k, v in (cabecalhos or {}).items():
         req.add_header(k, v)
     return req
 
 
-def listar(pasta=''):
+def listar(pasta='', tentativas=6):
     """PROPFIND Depth 1 → lista de (nome, tamanho)."""
     # a Receita às vezes derruba a conexão (Connection reset): tenta de novo antes de desistir
-    for tentativa in range(1, 7):
+    for tentativa in range(1, tentativas + 1):
         try:
             req = requisicao(BASE + pasta, 'PROPFIND', {'Depth': '1'})
             with urllib.request.urlopen(req, timeout=120) as r:
                 xml = r.read()
             break
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            if tentativa == 6 or (isinstance(e, urllib.error.HTTPError) and e.code in (401, 403, 404)):
+            if tentativa == tentativas or (isinstance(e, urllib.error.HTTPError) and e.code in (401, 403, 404)):
                 raise
             log(f'  listar {pasta or "/"}: falha na tentativa {tentativa}: {e}')
             time.sleep(30 * tentativa)
@@ -80,9 +85,37 @@ def listar(pasta=''):
     return itens
 
 
+def ler_pagina(url):
+    for tentativa in range(1, 5):
+        try:
+            with urllib.request.urlopen(requisicao(url), timeout=60) as r:
+                return r.read().decode('utf-8', 'replace')
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if tentativa == 4:
+                raise
+            log(f'  {url}: falha na tentativa {tentativa}: {e}')
+            time.sleep(20 * tentativa)
+
+
+def mes_do_espelho():
+    """Pasta mais recente (AAAA-MM-DD) do espelho que tem a base completa."""
+    pastas = sorted(set(re.findall(r'(\d{4}-\d{2}-\d{2})/', ler_pagina(ESPELHO))), reverse=True)
+    for pasta in pastas[:3]:
+        pagina = ler_pagina(ESPELHO + pasta + '/')
+        if all(f'Estabelecimentos{i}.zip' in pagina for i in range(10)) and 'Municipios.zip' in pagina:
+            log(f'Usando o espelho Casa dos Dados, pasta {pasta}')
+            return pasta
+    raise SystemExit('Nenhuma pasta completa no espelho Casa dos Dados.')
+
+
 def mes_mais_recente():
-    """Último mês (YYYY-MM) com a base completa publicada."""
-    meses = sorted({n for n, _ in listar() if re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', n)}, reverse=True)
+    """Último mês com a base completa: YYYY-MM na Receita, ou AAAA-MM-DD no espelho se a Receita recusar."""
+    try:
+        raiz = listar(tentativas=2)
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        log(f'Receita recusou a conexão ({e}); indo para o espelho.')
+        return mes_do_espelho()
+    meses = sorted({n for n, _ in raiz if re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', n)}, reverse=True)
     for mes in meses:
         nomes = {n for n, _ in listar(mes + '/')}
         if all(f'Estabelecimentos{i}.zip' in nomes for i in range(10)) and 'Municipios.zip' in nomes:
@@ -93,7 +126,7 @@ def mes_mais_recente():
 
 def baixar(mes, nome, destino, tentativas=6):
     """Baixa com retomada (Range) e confere o tamanho."""
-    url = f'{BASE}{mes}/{nome}'
+    url = f'{ESPELHO if re.fullmatch(r"\d{4}-\d{2}-\d{2}", mes) else BASE}{mes}/{nome}'
     tamanho = None
     for tentativa in range(1, tentativas + 1):
         try:
