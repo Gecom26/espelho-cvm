@@ -1,11 +1,11 @@
 {
- "gerado_em": "2026-11-24 00:36",
- "referencia": "2026-11",
+ "gerado_em": "2026-11-24 20:15",
+ "referencia": "2026-10-13",
  "uf": "SC",
  "sem_mei": true,
- "total": 801920,
- "bytes_gz": 24013245,
- "bytes_texto": 84913362,
+ "total": 797823,
+ "bytes_gz": 23892464,
+ "bytes_texto": 84420552,
  "versao": 2,
  "formato": "CNPJ|RAZAO|FANTASIA|MUNICIPIO|M/F|CNAE|CNAES_SECUNDARIOS|SIMPLES"
 }
